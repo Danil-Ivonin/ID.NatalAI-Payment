@@ -140,7 +140,7 @@ payment-service/
   internal/
     domain/
       payment/
-        entity.go
+        payment.go
         status.go
         money.go
         errors.go

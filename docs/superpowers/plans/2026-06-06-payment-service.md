@@ -24,7 +24,8 @@
 
 - Modify: `go.mod`, `go.sum` - добавить Gin, pgx, RabbitMQ client, golang-migrate driver dependencies, test helpers.
 - Modify: `migrations/000001_init.up.sql`, `migrations/000001_init.down.sql` - довести схему до архитектуры, так как проект еще не выглядит запущенным в production.
-- Modify: `internal/domain/payment/status.go`, `internal/domain/payment/order.go`, `internal/domain/payment/money.go`, `internal/domain/payment/errors.go` - заменить раннюю `Order` модель на `Payment` модель из архитектуры.
+- Move: `internal/domain/payment/order.go` -> `internal/domain/payment/entity.go` - заменить раннюю `Order` модель на `Payment` модель из архитектуры.
+- Modify: `internal/domain/payment/status.go`, `internal/domain/payment/money.go`, `internal/domain/payment/errors.go`.
 - Create: `internal/domain/payment/payment_test.go`, `internal/domain/payment/money_test.go`.
 - Create: `internal/domain/outbox/event.go`, `internal/domain/outbox/event_test.go`.
 - Modify: `internal/app/ports/*.go`, `internal/app/ports/repository/*.go` - определить интерфейсы application boundary.
@@ -184,8 +185,8 @@ git commit -m "chore: add payment service tooling baseline"
 ## Task 2: Domain Model
 
 **Files:**
+- Move: `internal/domain/payment/order.go` -> `internal/domain/payment/payment.go`
 - Modify: `internal/domain/payment/status.go`
-- Modify: `internal/domain/payment/order.go`
 - Modify: `internal/domain/payment/money.go`
 - Modify: `internal/domain/payment/errors.go`
 - Create: `internal/domain/payment/payment_test.go`
@@ -308,7 +309,17 @@ func TestPayment_MarkSucceededRejectsTerminalStatus(t *testing.T) {
 }
 ```
 
-- [ ] **Step 3: Implement payment domain**
+- [ ] **Step 3: Rename old order entity file**
+
+Run:
+
+```powershell
+git mv internal/domain/payment/order.go internal/domain/payment/entity.go
+```
+
+Expected: old `Order` model will be replaced by the architecture-level `Payment` entity in the next step.
+
+- [ ] **Step 4: Implement payment domain**
 
 Replace domain files with:
 
@@ -405,7 +416,7 @@ var (
 )
 ```
 
-- [ ] **Step 4: Add outbox domain event**
+- [ ] **Step 5: Add outbox domain event**
 
 Create `internal/domain/outbox/event.go`:
 
@@ -445,7 +456,7 @@ type Event struct {
 }
 ```
 
-- [ ] **Step 5: Verify domain**
+- [ ] **Step 6: Verify domain**
 
 Run:
 
@@ -455,7 +466,7 @@ go test ./internal/domain/...
 
 Expected: all domain tests pass.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```powershell
 git add internal/domain
