@@ -261,7 +261,6 @@ func TestPayment_MarkWaitingForPayment(t *testing.T) {
 	p := Payment{
 		ID:             uuid.New(),
 		UserID:         123,
-		ChatID:         456,
 		Amount:         Money{AmountMinor: 29900, Currency: "RUB"},
 		Description:    "Покупка 1000 coins",
 		ProductCode:    "coins_1000",
@@ -309,12 +308,12 @@ func TestPayment_MarkSucceededRejectsTerminalStatus(t *testing.T) {
 }
 ```
 
-- [ ] **Step 3: Rename old order entity file**
+- [ ] **Step 3: Rename old order payment file**
 
 Run:
 
 ```powershell
-git mv internal/domain/payment/order.go internal/domain/payment/entity.go
+git mv internal/domain/payment/order.go internal/domain/payment/payment.go
 ```
 
 Expected: old `Order` model will be replaced by the architecture-level `Payment` entity in the next step.
@@ -352,7 +351,6 @@ type Money struct {
 type Payment struct {
 	ID             uuid.UUID
 	UserID         int64
-	ChatID         int64
 	Amount         Money
 	Description    string
 	ProductCode    string
@@ -732,7 +730,6 @@ Use:
 ```go
 type CreatePaymentRequest struct {
 	UserID         int64
-	ChatID         int64
 	AmountMinor    int64
 	Currency       string
 	Description    string
@@ -813,7 +810,6 @@ Payload JSON must match architecture:
     "provider": "robokassa",
     "provider_invoice_id": 10000001,
     "user_id": 12345,
-    "chat_id": 12345,
     "amount_minor": 29900,
     "currency": "RUB",
     "description": "Покупка 1000 coins",
@@ -1113,7 +1109,6 @@ GET /metrics
 Validate:
 
 - `user_id > 0`;
-- `chat_id > 0`;
 - `amount_minor > 0`;
 - `currency == "RUB"`;
 - `description` length is 1..512 runes;
@@ -1369,7 +1364,6 @@ Run:
 ```powershell
 Invoke-RestMethod -Method Post -Uri http://localhost:8080/v1/payments -ContentType 'application/json' -Body '{
   "user_id": 12345,
-  "chat_id": 12345,
   "amount_minor": 29900,
   "currency": "RUB",
   "description": "Покупка 1000 coins",

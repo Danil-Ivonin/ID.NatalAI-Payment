@@ -1,7 +1,6 @@
 CREATE TABLE payments (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id BIGINT NOT NULL,
-    chat_id BIGINT NOT NULL,
     amount_minor BIGINT NOT NULL,
     currency CHAR(3) NOT NULL DEFAULT 'RUB',
     description TEXT NOT NULL,

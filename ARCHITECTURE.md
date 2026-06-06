@@ -307,7 +307,6 @@ payment-service/
 CREATE TABLE payments (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id BIGINT NOT NULL,
-    chat_id BIGINT NOT NULL,
     amount_minor BIGINT NOT NULL,
     currency CHAR(3) NOT NULL DEFAULT 'RUB',
     description TEXT NOT NULL,
@@ -325,7 +324,6 @@ CREATE TABLE payments (
 
 - `id` — внутренний идентификатор платежа.
 - `user_id` — id пользователя Telegram или внутренний id пользователя.
-- `chat_id` — id чата для отправки уведомления.
 - `amount_minor` — сумма в минимальных единицах, например копейках.
 - `currency` — валюта платежа.
 - `description` — человекочитаемое описание платежа.
@@ -598,7 +596,6 @@ Request:
 ```json
 {
   "user_id": 12345,
-  "chat_id": 12345,
   "amount_minor": 29900,
   "currency": "RUB",
   "description": "Покупка 1000 coins",
@@ -825,7 +822,6 @@ Event:
     "provider": "robokassa",
     "provider_invoice_id": 10000001,
     "user_id": 12345,
-    "chat_id": 12345,
     "amount_minor": 29900,
     "currency": "RUB",
     "description": "Покупка 1000 coins",
