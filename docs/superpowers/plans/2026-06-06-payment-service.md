@@ -2,58 +2,74 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Построить Go payment-service для Robokassa с идемпотентным созданием платежей, подтверждением через ResultURL, PostgreSQL transactional outbox, RabbitMQ publishing и reconciliation worker.
+**Goal:** Build the Go payment-service described in `ARCHITECTURE.md`: Robokassa payment creation, ResultURL confirmation, PostgreSQL source of truth, transactional outbox publishing to RabbitMQ, and reconciliation for missed callbacks.
 
-**Architecture:** Сохраняем Hexagonal Architecture из `ARCHITECTURE.md`: домен не зависит от Gin, pgx, RabbitMQ или Robokassa; application слой работает через ports; инфраструктура живет в adapters/http/config/logger. Composition root находится только в `cmd/*/main.go`, wiring выполняется manual constructor injection.
+**Architecture:** Keep the current Hexagonal Architecture. Domain packages stay free of Gin, pgx, RabbitMQ, Robokassa, and environment access. Application use cases depend on ports. Adapters implement ports. `cmd/*/main.go` stays thin and wires dependencies with manual constructor injection.
 
-**Tech Stack:** Go 1.25.5, Gin, pgx/v5, PostgreSQL, RabbitMQ `amqp091-go`, Robokassa HTTP/signature integration, golang-migrate, `log/slog`, table-driven tests, integration tests через build tag `integration`.
+**Tech Stack:** Go 1.25.5, Gin, pgx/v5, PostgreSQL, RabbitMQ via `amqp091-go`, Robokassa HTTP/signature integration, golang-migrate, `log/slog`, table-driven tests, integration tests behind the `integration` build tag.
 
 ---
 
-## Текущий Контекст
+## Current Repository State
 
-Репозиторий уже содержит заготовки:
+The repository already contains a useful foundation:
 
-- `cmd/api/main.go` и `cmd/outbox-worker/main.go` существуют, но содержат только `package main`.
-- `internal/domain/payment` содержит раннюю модель `Order`, статусы `pending/paid/...` и баг в `NewMoney`: `RUB` сейчас ошибочно считается неверной валютой.
-- `internal/app/ports/*` и `internal/app/usecase/*` созданы как пустые пакеты.
-- `migrations/000001_init.up.sql` уже создает базовые таблицы, но не хватает `outbox_events`, `payment_invoice_id_seq`, индексов payments и `reason` в истории статусов.
-- `git status` показывает незакоммиченные изменения; при исполнении плана не откатывать существующие файлы без отдельного решения владельца.
+- `internal/domain/payment` has `Payment`, `Status`, `Money`, errors, and tests.
+- `internal/app/ports` and `internal/app/ports/repository` already define most interfaces and DTOs.
+- `migrations/000001_init.up.sql` creates base payment/provider/history tables and `payment_invoice_id_seq`.
+- `makefile` already contains `test`, `test-race`, `test-integration`, `lint`, `fmt`, `migrate-up`, `migrate-down`, and run targets.
+- `cmd/api/main.go`, `cmd/outbox-worker/main.go`, `internal/app/usecase/*`, `internal/config/config.go`, and `internal/domain/outbox/event.go` are placeholders.
+- `go test ./...` currently passes because many packages are empty.
 
-## Файловая Карта
+This plan starts from that state. Do not recreate files that already exist. Do not rename `internal/domain/payment/payment.go`; it is already the correct entity file.
 
-- Modify: `go.mod`, `go.sum` - добавить Gin, pgx, RabbitMQ client, golang-migrate driver dependencies, test helpers.
-- Modify: `migrations/000001_init.up.sql`, `migrations/000001_init.down.sql` - довести схему до архитектуры, так как проект еще не выглядит запущенным в production.
-- Move: `internal/domain/payment/order.go` -> `internal/domain/payment/entity.go` - заменить раннюю `Order` модель на `Payment` модель из архитектуры.
-- Modify: `internal/domain/payment/status.go`, `internal/domain/payment/money.go`, `internal/domain/payment/errors.go`.
-- Create: `internal/domain/payment/payment_test.go`, `internal/domain/payment/money_test.go`.
-- Create: `internal/domain/outbox/event.go`, `internal/domain/outbox/event_test.go`.
-- Modify: `internal/app/ports/*.go`, `internal/app/ports/repository/*.go` - определить интерфейсы application boundary.
+## Go Implementation Rules
+
+- Use TDD for domain and usecase behavior: failing test, minimal implementation, passing test.
+- Keep package names lowercase and directory-matched.
+- Prefer small interfaces at the consumer boundary. Existing ports are the application boundary; adapters must satisfy them.
+- Pass `context.Context` to every database, HTTP, RabbitMQ, and worker operation.
+- Use pgx with explicit SQL and parameterized placeholders. No ORM.
+- Use `SELECT ... FOR UPDATE` when changing payment state after loading a row.
+- Use `FOR UPDATE SKIP LOCKED` for outbox batch locking.
+- Use `errors.Is`/`errors.As` friendly sentinel errors at domain/application boundaries and wrap technical errors with context.
+- Use `amount_minor int64`; no money path may use `float64`.
+- External calls must have timeouts.
+- Commands in `cmd/*` should parse config, wire dependencies, run, and handle graceful shutdown only.
+
+## File Map
+
+- Modify: `go.mod`, `go.sum` - runtime and test dependencies.
+- Modify: `internal/domain/payment/money.go`, `internal/domain/payment/errors.go`, `internal/domain/payment/money_test.go` - align money invariant with DB constraint.
+- Modify: `internal/domain/outbox/event.go` - define outbox event entity and statuses.
+- Modify: `migrations/000001_init.up.sql`, `migrations/000001_init.down.sql` - add missing outbox table, indexes, and `reason`.
+- Modify: `internal/app/ports/*.go`, `internal/app/ports/repository/*.go` - keep existing boundaries, adjust only if usecase tests expose a contract gap.
 - Modify: `internal/app/usecase/create_payment.go`, `confirm_payment.go`, `handle_result.go`, `publish_outbox.go`.
-- Create: `internal/app/usecase/reconcile_payment.go`, `internal/app/usecase/*_test.go`.
+- Create: `internal/app/usecase/reconcile_payment.go`.
+- Create: `internal/app/usecase/*_test.go`.
 - Create: `internal/adapters/postgres/*.go`, `internal/adapters/postgres/*_integration_test.go`.
-- Create: `internal/adapters/robokassa/client.go`, `signer.go`, `url_builder.go`, `*_test.go`.
-- Create: `internal/adapters/broker/rabbitmq.go`, `rabbitmq_test.go`.
+- Create: `internal/adapters/robokassa/*.go`, `internal/adapters/robokassa/*_test.go`.
+- Create: `internal/adapters/broker/rabbitmq.go`, `internal/adapters/broker/rabbitmq_test.go`.
 - Create: `internal/http/router.go`, `payment_handler.go`, `robokassa_webhook_handler.go`, `middleware.go`, `*_test.go`.
 - Modify: `internal/config/config.go`.
 - Create: `internal/logger/logger.go`, `internal/observability/metrics.go`.
-- Create: `cmd/reconciler/main.go`.
 - Modify: `cmd/api/main.go`, `cmd/outbox-worker/main.go`.
-- Create: `Makefile`, `.golangci.yml`, `docker-compose.yml`.
+- Create: `cmd/reconciler/main.go`.
 - Modify: `README.md`.
 
 ---
 
-## Task 1: Dependencies And Tooling Baseline
+## Task 1: Baseline Dependencies And Domain Corrections
 
 **Files:**
 - Modify: `go.mod`
 - Modify: `go.sum`
-- Create: `Makefile`
-- Create: `.golangci.yml`
-- Create: `docker-compose.yml`
+- Modify: `internal/domain/payment/money.go`
+- Modify: `internal/domain/payment/errors.go`
+- Modify: `internal/domain/payment/money_test.go`
+- Modify: `internal/domain/outbox/event.go`
 
-- [ ] **Step 1: Add runtime dependencies**
+- [ ] **Step 1: Add dependencies**
 
 Run:
 
@@ -67,344 +83,32 @@ go get github.com/stretchr/testify@latest
 go mod tidy
 ```
 
-Expected: `go.mod` contains direct requirements for Gin, pgx/v5, amqp091-go, migrate, Prometheus client, testify.
+Expected: `go.mod` has direct requirements for Gin, pgx/v5, amqp091-go, migrate, Prometheus client, and testify if used in tests.
 
-- [ ] **Step 2: Create Makefile**
+- [ ] **Step 2: Fix money invariant test first**
 
-Create `Makefile`:
+Change `TestNewMoney` so zero amount is invalid:
 
-```makefile
-.PHONY: test test-race test-integration lint fmt migrate-up migrate-down run-api run-outbox run-reconciler
-
-test:
-	go test ./...
-
-test-race:
-	go test -race ./...
-
-test-integration:
-	go test -tags=integration ./...
-
-lint:
-	golangci-lint run ./...
-
-fmt:
-	gofmt -s -w .
-
-migrate-up:
-	migrate -path migrations -database "$$DATABASE_URL" up
-
-migrate-down:
-	migrate -path migrations -database "$$DATABASE_URL" down 1
-
-run-api:
-	go run ./cmd/api
-
-run-outbox:
-	go run ./cmd/outbox-worker
-
-run-reconciler:
-	go run ./cmd/reconciler
+```go
+{name: "zero amount", amount: 0, currency: "RUB", wantErr: ErrInvalidAmount},
+{name: "negative amount", amount: -1, currency: "RUB", wantErr: ErrInvalidAmount},
+{name: "empty currency", amount: 100, currency: "", wantErr: ErrInvalidCurrency},
+{name: "unsupported currency", amount: 100, currency: "USD", wantErr: ErrInvalidCurrency},
 ```
-
-- [ ] **Step 3: Create docker-compose for local backing services**
-
-Create `docker-compose.yml`:
-
-```yaml
-services:
-  postgres:
-    image: postgres:16
-    environment:
-      POSTGRES_USER: payment
-      POSTGRES_PASSWORD: payment
-      POSTGRES_DB: payment
-    ports:
-      - "5432:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U payment -d payment"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-
-  rabbitmq:
-    image: rabbitmq:3.13-management
-    ports:
-      - "5672:5672"
-      - "15672:15672"
-    healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-```
-
-- [ ] **Step 4: Create minimal lint config**
-
-Create `.golangci.yml`:
-
-```yaml
-version: "2"
-run:
-  timeout: 5m
-linters:
-  enable:
-    - govet
-    - staticcheck
-    - errcheck
-    - ineffassign
-    - unused
-    - bodyclose
-    - sqlclosecheck
-    - gosec
-    - nilerr
-    - revive
-    - nolintlint
-```
-
-- [ ] **Step 5: Verify baseline**
 
 Run:
 
 ```powershell
-go test ./...
-go test -race ./...
+go test ./internal/domain/payment -run TestNewMoney -count=1
 ```
 
-Expected: tests pass or package compilation fails only on intentionally empty stubs that are fixed in Task 2.
+Expected: FAIL until `NewMoney` rejects `amount <= 0` and uses the new error names.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 3: Implement money corrections**
 
-```powershell
-git add go.mod go.sum Makefile .golangci.yml docker-compose.yml
-git commit -m "chore: add payment service tooling baseline"
-```
-
----
-
-## Task 2: Domain Model
-
-**Files:**
-- Move: `internal/domain/payment/order.go` -> `internal/domain/payment/payment.go`
-- Modify: `internal/domain/payment/status.go`
-- Modify: `internal/domain/payment/money.go`
-- Modify: `internal/domain/payment/errors.go`
-- Create: `internal/domain/payment/payment_test.go`
-- Create: `internal/domain/payment/money_test.go`
-- Create: `internal/domain/outbox/event.go`
-- Create: `internal/domain/outbox/event_test.go`
-
-- [ ] **Step 1: Write failing tests for money validation**
-
-Create `internal/domain/payment/money_test.go`:
+Use these sentinel errors in `errors.go`:
 
 ```go
-package payment
-
-import "testing"
-
-func TestNewMoney(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		amount   int64
-		currency string
-		wantErr  error
-	}{
-		{name: "valid rub amount", amount: 29900, currency: "RUB", wantErr: nil},
-		{name: "zero amount", amount: 0, currency: "RUB", wantErr: ErrInvalidAmount},
-		{name: "negative amount", amount: -1, currency: "RUB", wantErr: ErrInvalidAmount},
-		{name: "empty currency", amount: 100, currency: "", wantErr: ErrInvalidCurrency},
-		{name: "unsupported currency", amount: 100, currency: "USD", wantErr: ErrInvalidCurrency},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			got, err := NewMoney(tt.amount, tt.currency)
-			if tt.wantErr != nil {
-				if err != tt.wantErr {
-					t.Fatalf("NewMoney() error = %v, want %v", err, tt.wantErr)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("NewMoney() unexpected error: %v", err)
-			}
-			if got.AmountMinor != tt.amount || got.Currency != tt.currency {
-				t.Fatalf("NewMoney() = %+v, want amount=%d currency=%s", got, tt.amount, tt.currency)
-			}
-		})
-	}
-}
-```
-
-- [ ] **Step 2: Write failing tests for status transitions**
-
-Create `internal/domain/payment/payment_test.go`:
-
-```go
-package payment
-
-import (
-	"testing"
-	"time"
-
-	"github.com/google/uuid"
-)
-
-func TestPayment_MarkWaitingForPayment(t *testing.T) {
-	t.Parallel()
-
-	p := Payment{
-		ID:             uuid.New(),
-		UserID:         123,
-		Amount:         Money{AmountMinor: 29900, Currency: "RUB"},
-		Description:    "Покупка 1000 coins",
-		ProductCode:    "coins_1000",
-		Status:         StatusCreated,
-		IdempotencyKey: "tg-123-coins-1000-001",
-	}
-
-	if err := p.MarkWaitingForPayment(); err != nil {
-		t.Fatalf("MarkWaitingForPayment() unexpected error: %v", err)
-	}
-	if p.Status != StatusWaitingForPayment {
-		t.Fatalf("status = %s, want %s", p.Status, StatusWaitingForPayment)
-	}
-}
-
-func TestPayment_MarkSucceeded(t *testing.T) {
-	t.Parallel()
-
-	paidAt := time.Date(2026, 6, 6, 12, 0, 0, 0, time.UTC)
-	p := Payment{
-		ID:     uuid.New(),
-		Status: StatusWaitingForPayment,
-		Amount: Money{AmountMinor: 29900, Currency: "RUB"},
-	}
-
-	if err := p.MarkSucceeded(paidAt); err != nil {
-		t.Fatalf("MarkSucceeded() unexpected error: %v", err)
-	}
-	if p.Status != StatusSucceeded {
-		t.Fatalf("status = %s, want %s", p.Status, StatusSucceeded)
-	}
-	if p.PaidAt == nil || !p.PaidAt.Equal(paidAt) {
-		t.Fatalf("paid_at = %v, want %v", p.PaidAt, paidAt)
-	}
-}
-
-func TestPayment_MarkSucceededRejectsTerminalStatus(t *testing.T) {
-	t.Parallel()
-
-	p := Payment{ID: uuid.New(), Status: StatusSucceeded}
-
-	if err := p.MarkSucceeded(time.Now()); err != ErrInvalidStatusTransition {
-		t.Fatalf("MarkSucceeded() error = %v, want %v", err, ErrInvalidStatusTransition)
-	}
-}
-```
-
-- [ ] **Step 3: Rename old order payment file**
-
-Run:
-
-```powershell
-git mv internal/domain/payment/order.go internal/domain/payment/payment.go
-```
-
-Expected: old `Order` model will be replaced by the architecture-level `Payment` entity in the next step.
-
-- [ ] **Step 4: Implement payment domain**
-
-Replace domain files with:
-
-```go
-package payment
-
-import (
-	"time"
-
-	"github.com/google/uuid"
-)
-
-type Status string
-
-const (
-	StatusCreated           Status = "created"
-	StatusWaitingForPayment Status = "waiting_for_payment"
-	StatusSucceeded         Status = "succeeded"
-	StatusFailed            Status = "failed"
-	StatusExpired           Status = "expired"
-	StatusCancelled         Status = "cancelled"
-	StatusRefunded          Status = "refunded"
-)
-
-type Money struct {
-	AmountMinor int64
-	Currency    string
-}
-
-type Payment struct {
-	ID             uuid.UUID
-	UserID         int64
-	Amount         Money
-	Description    string
-	ProductCode    string
-	Status         Status
-	IdempotencyKey string
-	PaidAt         *time.Time
-	ExpiresAt      *time.Time
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
-}
-
-func NewMoney(amountMinor int64, currency string) (Money, error) {
-	if amountMinor <= 0 {
-		return Money{}, ErrInvalidAmount
-	}
-	if currency != "RUB" {
-		return Money{}, ErrInvalidCurrency
-	}
-	return Money{AmountMinor: amountMinor, Currency: currency}, nil
-}
-
-func (p *Payment) MarkWaitingForPayment() error {
-	if p.Status != StatusCreated {
-		return ErrInvalidStatusTransition
-	}
-	p.Status = StatusWaitingForPayment
-	return nil
-}
-
-func (p *Payment) MarkSucceeded(paidAt time.Time) error {
-	if p.Status != StatusWaitingForPayment {
-		return ErrInvalidStatusTransition
-	}
-	p.Status = StatusSucceeded
-	p.PaidAt = &paidAt
-	return nil
-}
-
-func (p *Payment) MarkExpired() error {
-	if p.Status != StatusWaitingForPayment {
-		return ErrInvalidStatusTransition
-	}
-	p.Status = StatusExpired
-	return nil
-}
-```
-
-Use `errors.go`:
-
-```go
-package payment
-
-import "errors"
-
 var (
 	ErrInvalidAmount           = errors.New("invalid amount")
 	ErrInvalidCurrency         = errors.New("invalid currency")
@@ -414,20 +118,25 @@ var (
 )
 ```
 
-- [ ] **Step 5: Add outbox domain event**
-
-Create `internal/domain/outbox/event.go`:
+Update `NewMoney` to return `Money` by value:
 
 ```go
-package outbox
+func NewMoney(amountMinor int64, currency string) (Money, error) {
+	if amountMinor <= 0 {
+		return Money{}, ErrInvalidAmount
+	}
+	if currency != "RUB" {
+		return Money{}, ErrInvalidCurrency
+	}
+	return Money{AmountMinor: amountMinor, Currency: currency}, nil
+}
+```
 
-import (
-	"encoding/json"
-	"time"
+- [ ] **Step 4: Define outbox domain entity**
 
-	"github.com/google/uuid"
-)
+Replace the placeholder `Event` with:
 
+```go
 type Status string
 
 const (
@@ -449,47 +158,41 @@ type Event struct {
 	LockedAt      *time.Time
 	LockedBy      *string
 	PublishedAt   *time.Time
-	LastError     *string
+	LastError      *string
 	CreatedAt     time.Time
 }
 ```
 
-- [ ] **Step 6: Verify domain**
+- [ ] **Step 5: Verify and commit**
 
 Run:
 
 ```powershell
-go test ./internal/domain/...
+gofmt -s -w internal/domain
+go test ./internal/domain/... -count=1
+go test ./... -count=1
 ```
 
-Expected: all domain tests pass.
-
-- [ ] **Step 7: Commit**
+Commit:
 
 ```powershell
-git add internal/domain
-git commit -m "feat: define payment domain model"
+git add go.mod go.sum internal/domain
+git commit -m "feat: align domain payment invariants"
 ```
 
 ---
 
-## Task 3: Database Schema
+## Task 2: Database Schema Completeness
 
 **Files:**
 - Modify: `migrations/000001_init.up.sql`
 - Modify: `migrations/000001_init.down.sql`
 
-- [ ] **Step 1: Extend up migration**
+- [ ] **Step 1: Complete the migration**
 
-Update `migrations/000001_init.up.sql` to include:
+Keep existing tables and add:
 
 ```sql
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
-
-CREATE SEQUENCE payment_invoice_id_seq
-    START WITH 10000000
-    INCREMENT BY 1;
-
 CREATE INDEX idx_payments_status ON payments(status);
 CREATE INDEX idx_payments_created_at ON payments(created_at);
 CREATE INDEX idx_payments_expires_at ON payments(expires_at);
@@ -519,11 +222,11 @@ CREATE INDEX idx_outbox_pending
     WHERE status IN ('pending', 'failed');
 ```
 
-Place `CREATE EXTENSION` and sequence before table definitions, indexes after related tables, and `outbox_events` after status history.
+If production data does not exist, change sequence start to `10000000` to match `ARCHITECTURE.md`; otherwise keep the current start and document the reason in `README.md`.
 
-- [ ] **Step 2: Extend down migration**
+- [ ] **Step 2: Complete down migration**
 
-Update `migrations/000001_init.down.sql`:
+Drop in reverse dependency order:
 
 ```sql
 DROP TABLE IF EXISTS outbox_events;
@@ -546,7 +249,7 @@ migrate -path migrations -database $env:DATABASE_URL down 1
 migrate -path migrations -database $env:DATABASE_URL up
 ```
 
-Expected: all commands complete without migration errors.
+Expected: all migration commands complete without SQL errors.
 
 - [ ] **Step 4: Commit**
 
@@ -557,175 +260,38 @@ git commit -m "feat: complete payment database schema"
 
 ---
 
-## Task 4: Application Ports
+## Task 3: Application Use Cases
 
 **Files:**
-- Modify: `internal/app/ports/tx_manager.go`
-- Modify: `internal/app/ports/payment_provider.go`
-- Modify: `internal/app/ports/event_publisher.go`
-- Modify: `internal/app/ports/repository/payment.go`
-- Modify: `internal/app/ports/repository/provider_invoice.go`
-- Modify: `internal/app/ports/repository/provider_event.go`
-- Modify: `internal/app/ports/repository/status_history.go`
-- Modify: `internal/app/ports/repository/outbox.go`
+- Modify: `internal/app/usecase/create_payment.go`
+- Modify: `internal/app/usecase/confirm_payment.go`
+- Modify: `internal/app/usecase/handle_result.go`
+- Create: `internal/app/usecase/reconcile_payment.go`
+- Create: `internal/app/usecase/create_payment_test.go`
+- Create: `internal/app/usecase/confirm_payment_test.go`
+- Create: `internal/app/usecase/handle_result_test.go`
+- Create: `internal/app/usecase/reconcile_payment_test.go`
 
-- [ ] **Step 1: Define transaction boundary**
+- [ ] **Step 1: Test `CreatePayment`**
 
-Implement:
+Cover these observable cases with fake repositories and provider:
 
-```go
-package ports
-
-import "context"
-
-type Tx interface{}
-
-type TxManager interface {
-	WithinTx(ctx context.Context, fn func(ctx context.Context, tx Tx) error) error
-}
-```
-
-- [ ] **Step 2: Define provider and publisher ports**
-
-Implement `payment_provider.go`:
-
-```go
-package ports
-
-import "context"
-
-type ProviderPaymentStatus string
-
-const (
-	ProviderPaymentStatusPending   ProviderPaymentStatus = "pending"
-	ProviderPaymentStatusSucceeded ProviderPaymentStatus = "succeeded"
-	ProviderPaymentStatusFailed    ProviderPaymentStatus = "failed"
-)
-
-type BuildPaymentURLRequest struct {
-	ProviderInvoiceID int64
-	AmountMinor       int64
-	Currency          string
-	Description       string
-}
-
-type PaymentProvider interface {
-	BuildPaymentURL(req BuildPaymentURLRequest) (string, error)
-	VerifyResultSignature(values map[string]string) bool
-	CheckPaymentStatus(ctx context.Context, providerInvoiceID int64) (ProviderPaymentStatus, error)
-}
-```
-
-Implement `event_publisher.go`:
-
-```go
-package ports
-
-import (
-	"context"
-	"encoding/json"
-)
-
-type EventPublisher interface {
-	Publish(ctx context.Context, exchange string, routingKey string, body json.RawMessage) error
-}
-```
-
-- [ ] **Step 3: Define repository ports**
-
-Add repository DTOs and methods with `ctx context.Context` as the first argument:
-
-```go
-type PaymentRepository interface {
-	Create(ctx context.Context, tx ports.Tx, payment payment.Payment) (payment.Payment, error)
-	FindByID(ctx context.Context, tx ports.Tx, id uuid.UUID) (payment.Payment, error)
-	FindByIdempotencyKey(ctx context.Context, tx ports.Tx, key string) (payment.Payment, bool, error)
-	FindByProviderInvoiceIDForUpdate(ctx context.Context, tx ports.Tx, provider string, providerInvoiceID int64) (payment.Payment, error)
-	Update(ctx context.Context, tx ports.Tx, payment payment.Payment) error
-	ListWaitingForPayment(ctx context.Context, tx ports.Tx, olderThan time.Time, newerThan time.Time, limit int) ([]payment.Payment, error)
-}
-```
-
-Define matching interfaces for provider invoices, provider events, status history and outbox:
-
-```go
-type ProviderInvoiceRepository interface {
-	NextProviderInvoiceID(ctx context.Context, tx ports.Tx) (int64, error)
-	Create(ctx context.Context, tx ports.Tx, invoice ProviderInvoice) error
-	FindByPaymentID(ctx context.Context, tx ports.Tx, paymentID uuid.UUID, provider string) (ProviderInvoice, error)
-}
-
-type ProviderEventRepository interface {
-	Create(ctx context.Context, tx ports.Tx, event ProviderEvent) error
-	MarkProcessed(ctx context.Context, tx ports.Tx, provider string, payloadHash string, signatureValid bool) error
-}
-
-type StatusHistoryRepository interface {
-	Create(ctx context.Context, tx ports.Tx, history StatusHistory) error
-}
-
-type OutboxRepository interface {
-	Create(ctx context.Context, tx ports.Tx, event outbox.Event) error
-	LockPending(ctx context.Context, tx ports.Tx, workerID string, limit int) ([]outbox.Event, error)
-	MarkPublished(ctx context.Context, tx ports.Tx, id uuid.UUID, publishedAt time.Time) error
-	MarkFailed(ctx context.Context, tx ports.Tx, id uuid.UUID, attempts int, publishAfter time.Time, lastError string) error
-}
-```
-
-- [ ] **Step 4: Verify ports compile**
+- new request creates `payments`, gets `NextProviderInvoiceID`, builds Robokassa URL, creates provider invoice, marks status `waiting_for_payment`;
+- duplicate `idempotency_key` returns the existing payment and invoice without creating a new payment;
+- invalid amount/currency returns a validation/domain error;
+- provider URL build failure aborts the transaction.
 
 Run:
 
 ```powershell
-go test ./internal/app/ports/...
+go test ./internal/app/usecase -run TestCreatePayment -count=1
 ```
 
-Expected: package compiles.
+Expected: FAIL until implementation exists.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 2: Implement `CreatePayment`**
 
-```powershell
-git add internal/app/ports
-git commit -m "feat: define application ports"
-```
-
----
-
-## Task 5: CreatePayment Use Case
-
-**Files:**
-- Modify: `internal/app/usecase/create_payment.go`
-- Create: `internal/app/usecase/create_payment_test.go`
-
-- [ ] **Step 1: Write tests**
-
-Cover these observable cases in `create_payment_test.go`:
-
-- new request creates `payments`, `payment_provider_invoices`, status history `payment_url_created`, and returns Robokassa URL;
-- same `idempotency_key` returns existing payment and invoice without new inserts;
-- invalid amount rejects before repository calls;
-- provider URL build failure rolls back transaction.
-
-Use in-memory fakes for ports. The main success assertion:
-
-```go
-if got.Status != payment.StatusWaitingForPayment {
-	t.Fatalf("status = %s, want %s", got.Status, payment.StatusWaitingForPayment)
-}
-if got.Provider != "robokassa" {
-	t.Fatalf("provider = %s, want robokassa", got.Provider)
-}
-if got.ProviderInvoiceID != 10000001 {
-	t.Fatalf("provider_invoice_id = %d, want 10000001", got.ProviderInvoiceID)
-}
-if got.PaymentURL == "" {
-	t.Fatal("payment_url is empty")
-}
-```
-
-- [ ] **Step 2: Implement request and response types**
-
-Use:
+Use request/response types in `create_payment.go`:
 
 ```go
 type CreatePaymentRequest struct {
@@ -747,183 +313,69 @@ type CreatePaymentResponse struct {
 }
 ```
 
-- [ ] **Step 3: Implement use case**
+Implementation must run inside `TxManager.WithinTx`, use existing repository ports, and return only after the transaction succeeds.
 
-`CreatePayment` must:
-
-1. Validate `Money`, non-empty description, non-empty idempotency key.
-2. Run all repository writes inside `TxManager.WithinTx`.
-3. Query `FindByIdempotencyKey`; if found, return existing invoice.
-4. Create payment with `StatusCreated`.
-5. Generate `provider_invoice_id` via repository sequence.
-6. Build URL through `PaymentProvider`.
-7. Mark payment as `waiting_for_payment`.
-8. Insert provider invoice.
-9. Insert status history with reason `payment_url_created`.
-10. Return response only after transaction function succeeds.
-
-- [ ] **Step 4: Verify use case**
-
-Run:
-
-```powershell
-go test ./internal/app/usecase -run TestCreatePayment -count=1
-```
-
-Expected: tests pass.
-
-- [ ] **Step 5: Commit**
-
-```powershell
-git add internal/app/usecase/create_payment.go internal/app/usecase/create_payment_test.go
-git commit -m "feat: implement create payment use case"
-```
-
----
-
-## Task 6: ConfirmPaymentSucceeded Use Case
-
-**Files:**
-- Modify: `internal/app/usecase/confirm_payment.go`
-- Create: `internal/app/usecase/confirm_payment_test.go`
-
-- [ ] **Step 1: Write tests**
+- [ ] **Step 3: Test `ConfirmPaymentSucceeded`**
 
 Cover:
 
 - `waiting_for_payment` becomes `succeeded`;
-- `succeeded` input returns success without a second outbox event;
-- amount mismatch returns `payment.ErrAmountMismatch`;
-- outbox unique conflict is treated as idempotent success only when payment is already `succeeded`.
+- status history is written with caller-provided `reason`;
+- exactly one `PaymentSucceeded` outbox event is created;
+- already `succeeded` is idempotent and does not create a second event;
+- amount mismatch returns `payment.ErrAmountMismatch`.
 
-- [ ] **Step 2: Implement event payload contract**
+- [ ] **Step 4: Implement `ConfirmPaymentSucceeded`**
 
-Payload JSON must match architecture:
+The use case must lock the payment through `FindByProviderInvoiceIDForUpdate`, compare amount, update payment, write status history, and insert an outbox event with:
 
-```json
-{
-  "event_id": "5f074414-22e8-4c4b-adc0-1d067c7c1c",
-  "event_type": "PaymentSucceeded",
-  "occurred_at": "2026-06-06T12:00:00Z",
-  "payload": {
-    "payment_id": "9b3dbd7e-30f3-49c7-b8b2-492508b7e6fa",
-    "provider": "robokassa",
-    "provider_invoice_id": 10000001,
-    "user_id": 12345,
-    "amount_minor": 29900,
-    "currency": "RUB",
-    "description": "Покупка 1000 coins",
-    "product_code": "coins_1000"
-  }
-}
+```text
+aggregate_type = "payment"
+event_type = "PaymentSucceeded"
+routing key target = payment.succeeded
 ```
 
-- [ ] **Step 3: Implement use case**
+- [ ] **Step 5: Test and implement `HandleRobokassaResult`**
 
-`ConfirmPaymentSucceeded` must run inside the caller's transaction, lock the payment before update, write status history with caller-provided reason, insert `PaymentSucceeded` outbox event with unique `(aggregate_type, aggregate_id, event_type)`.
+Tests must cover:
 
-- [ ] **Step 4: Verify**
+- valid callback persists provider event, verifies signature, confirms payment, marks provider event processed, and returns `OK{InvId}`;
+- invalid signature persists provider event with `signature_valid=false` and does not confirm payment;
+- duplicate callback for an already succeeded payment returns `OK{InvId}`;
+- amount mismatch does not create outbox;
+- `OK{InvId}` is produced after `WithinTx` returns nil.
+
+Use SHA-256 over canonical JSON for `payload_hash`. Parse Robokassa `OutSum` decimal into kopecks without `float64`.
+
+- [ ] **Step 6: Test and implement `ReconcilePayment`**
+
+Tests must cover:
+
+- provider says `succeeded`, use case calls shared confirmation with reason `reconciliation_success`;
+- provider says `pending`, payment remains unchanged;
+- expired unpaid payment becomes `expired` with history reason `payment_expired`;
+- provider error is wrapped and does not update payment.
+
+- [ ] **Step 7: Verify and commit**
 
 Run:
 
 ```powershell
-go test ./internal/app/usecase -run TestConfirmPaymentSucceeded -count=1
+gofmt -s -w internal/app
+go test ./internal/app/... -count=1
+go test ./... -count=1
 ```
 
-Expected: tests pass.
-
-- [ ] **Step 5: Commit**
+Commit:
 
 ```powershell
-git add internal/app/usecase/confirm_payment.go internal/app/usecase/confirm_payment_test.go
-git commit -m "feat: confirm successful payments transactionally"
+git add internal/app
+git commit -m "feat: implement payment use cases"
 ```
 
 ---
 
-## Task 7: HandleRobokassaResult Use Case
-
-**Files:**
-- Modify: `internal/app/usecase/handle_result.go`
-- Create: `internal/app/usecase/handle_result_test.go`
-
-- [ ] **Step 1: Write tests**
-
-Cover:
-
-- valid callback persists provider event, confirms payment, commits, returns `OK10000001`;
-- invalid signature persists provider event with `signature_valid=false`, does not confirm payment, returns an invalid signature error;
-- duplicate callback for already succeeded payment returns `OK10000001`;
-- amount mismatch does not create outbox event;
-- response string is produced after transaction succeeds, not from inside the transaction closure.
-
-- [ ] **Step 2: Implement request type**
-
-Use:
-
-```go
-type RobokassaResultRequest struct {
-	OutSum            string
-	InvID             int64
-	SignatureValue    string
-	RawValues         map[string]string
-	RawPayload        map[string]any
-	ReceivedAt        time.Time
-	ExpectedCurrency  string
-	ExpectedAmountRaw int64
-}
-```
-
-- [ ] **Step 3: Implement payload hash**
-
-Use SHA-256 over canonical JSON of raw payload:
-
-```go
-func payloadHash(raw map[string]any) (string, error) {
-	b, err := json.Marshal(raw)
-	if err != nil {
-		return "", fmt.Errorf("marshal provider payload: %w", err)
-	}
-	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:]), nil
-}
-```
-
-- [ ] **Step 4: Implement use case**
-
-Processing order:
-
-1. Compute payload hash.
-2. Start transaction.
-3. Save provider event with `event_type='robokassa_result'`.
-4. Verify signature.
-5. If invalid, mark processed with invalid signature and return domain error after commit/rollback semantics are explicit in test.
-6. Lock payment by provider invoice id.
-7. Parse and compare amount in kopecks.
-8. Call `ConfirmPaymentSucceeded` with reason `robokassa_result_url`.
-9. Mark provider event processed with `signature_valid=true`.
-10. Return `OK{InvId}` only after `WithinTx` returns nil.
-
-- [ ] **Step 5: Verify**
-
-Run:
-
-```powershell
-go test ./internal/app/usecase -run TestHandleRobokassaResult -count=1
-```
-
-Expected: tests pass.
-
-- [ ] **Step 6: Commit**
-
-```powershell
-git add internal/app/usecase/handle_result.go internal/app/usecase/handle_result_test.go
-git commit -m "feat: handle robokassa result callbacks"
-```
-
----
-
-## Task 8: PostgreSQL Adapters
+## Task 4: PostgreSQL Adapters
 
 **Files:**
 - Create: `internal/adapters/postgres/db.go`
@@ -935,74 +387,68 @@ git commit -m "feat: handle robokassa result callbacks"
 - Create: `internal/adapters/postgres/outbox_repository.go`
 - Create: `internal/adapters/postgres/*_integration_test.go`
 
-- [ ] **Step 1: Implement pgx pool factory**
+- [ ] **Step 1: Implement pgx pool and transaction manager**
 
-`NewPool(ctx, databaseURL string)` must call `pgxpool.ParseConfig`, configure pool limits from config, `Ping(ctx)`, and return `*pgxpool.Pool`.
+`NewPool(ctx, databaseURL string)` must parse config, set bounded pool values, ping, and return `*pgxpool.Pool`.
 
-- [ ] **Step 2: Implement TxManager**
+`TxManager.WithinTx` must begin, pass concrete `pgx.Tx` as `ports.Tx`, commit on nil, rollback on error, and use `errors.Join` if rollback also fails.
 
-Use `pgx.Tx` as concrete transaction behind `ports.Tx`. `WithinTx` must commit on nil error, rollback on function error, and join rollback error with function error using `errors.Join`.
+- [ ] **Step 2: Implement repositories with explicit SQL**
 
-- [ ] **Step 3: Implement repositories with parameterized SQL**
-
-Required SQL guarantees:
+Required payment lock query:
 
 ```sql
-SELECT p.*
+SELECT p.id, p.user_id, p.amount_minor, p.currency, p.description, p.product_code,
+       p.status, p.idempotency_key, p.paid_at, p.expires_at, p.created_at, p.updated_at
 FROM payments p
 JOIN payment_provider_invoices pi ON pi.payment_id = p.id
 WHERE pi.provider = $1 AND pi.provider_invoice_id = $2
-FOR UPDATE;
+FOR UPDATE
 ```
 
+Required outbox lock query:
+
 ```sql
-SELECT *
+SELECT id, aggregate_type, aggregate_id, event_type, payload, status, attempts,
+       publish_after, locked_at, locked_by, published_at, last_error, created_at
 FROM outbox_events
 WHERE status IN ('pending', 'failed')
   AND publish_after <= now()
 ORDER BY created_at
 LIMIT $1
-FOR UPDATE SKIP LOCKED;
+FOR UPDATE SKIP LOCKED
 ```
 
-- [ ] **Step 4: Add integration tests**
+- [ ] **Step 3: Add integration tests**
 
-Each integration test file starts with:
-
-```go
-//go:build integration
-```
-
-Tests use `TEST_DATABASE_URL`; if empty, call `t.Skip("TEST_DATABASE_URL is not set")`. Cover:
+Use `//go:build integration`. Skip if `TEST_DATABASE_URL` is empty. Cover:
 
 - idempotency unique constraint;
-- row lock path for provider invoice lookup;
+- provider invoice lookup with payment row lock;
+- provider event unique `(provider, payload_hash)`;
 - outbox unique business event;
-- outbox `FOR UPDATE SKIP LOCKED` batch lock;
-- migration schema roundtrip.
+- outbox lock batch excludes locked rows.
 
-- [ ] **Step 5: Verify**
+- [ ] **Step 4: Verify and commit**
 
 Run:
 
 ```powershell
-go test ./internal/adapters/postgres
+go test ./internal/adapters/postgres -count=1
 $env:TEST_DATABASE_URL='postgres://payment:payment@localhost:5432/payment?sslmode=disable'
 go test -tags=integration ./internal/adapters/postgres -count=1
 ```
 
-Expected: unit compile passes; integration tests pass with local PostgreSQL.
-
-- [ ] **Step 6: Commit**
+Commit:
 
 ```powershell
 git add internal/adapters/postgres
-git commit -m "feat: add postgres repositories"
+git commit -m "feat: add postgres adapters"
 ```
 
 ---
 
-## Task 9: Robokassa Adapter
+## Task 5: Robokassa Adapter
 
 **Files:**
 - Create: `internal/adapters/robokassa/signer.go`
@@ -1010,57 +456,37 @@ git commit -m "feat: add postgres repositories"
 - Create: `internal/adapters/robokassa/client.go`
 - Create: `internal/adapters/robokassa/*_test.go`
 
-- [ ] **Step 1: Write signer tests**
+- [ ] **Step 1: Test signer and URL builder**
 
-Use deterministic cases for ResultURL:
+Cover:
 
-```go
-values := map[string]string{
-	"OutSum":         "299.00",
-	"InvId":          "10000001",
-	"SignatureValue": "DE98F9AEE063E4BC6CB7D8E572B764D0",
-}
-```
+- payment URL signature uses password1;
+- ResultURL verification uses password2;
+- signature comparison is case-insensitive and constant-time after normalization;
+- URL uses `net/url.Values` and includes `MerchantLogin`, `OutSum`, `InvId`, `Description`, `SignatureValue`, and `IsTest`.
 
-Assert signature comparison is case-insensitive and uses Robokassa password2 value `password2` for ResultURL verification.
+- [ ] **Step 2: Implement Robokassa provider port**
 
-- [ ] **Step 2: Implement signer**
-
-Implement MD5 signature creation exactly as Robokassa requires for selected mode:
+Implement `ports.PaymentProvider`:
 
 ```go
-func resultSignature(outSum string, invID int64, password2 string) string {
-	raw := fmt.Sprintf("%s:%d:%s", outSum, invID, password2)
-	sum := md5.Sum([]byte(raw))
-	return strings.ToUpper(hex.EncodeToString(sum[:]))
-}
+func (c *Client) BuildPaymentURL(req ports.BuildPaymentURLRequest) (string, error)
+func (c *Client) VerifyResultSignature(values map[string]string) bool
+func (c *Client) CheckPaymentStatus(ctx context.Context, providerInvoiceID int64) (ports.ProviderPaymentStatus, error)
 ```
 
-Use constant-time compare after normalizing hex strings:
+HTTP status checks must use `http.NewRequestWithContext` and an `http.Client` with timeout.
 
-```go
-return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
-```
-
-- [ ] **Step 3: Implement URL builder**
-
-Build `https://auth.robokassa.ru/Merchant/Index.aspx` with `MerchantLogin`, `OutSum`, `InvId`, `Description`, `SignatureValue`, `IsTest` and optional product metadata. Use `net/url.Values`, never string concatenation for query parameters.
-
-- [ ] **Step 4: Implement status client**
-
-`CheckPaymentStatus(ctx, providerInvoiceID)` must use an HTTP client with timeout, `http.NewRequestWithContext`, parse Robokassa response, and map provider result to `ProviderPaymentStatus`.
-
-- [ ] **Step 5: Verify**
+- [ ] **Step 3: Verify and commit**
 
 Run:
 
 ```powershell
+gofmt -s -w internal/adapters/robokassa
 go test ./internal/adapters/robokassa -count=1
 ```
 
-Expected: tests pass.
-
-- [ ] **Step 6: Commit**
+Commit:
 
 ```powershell
 git add internal/adapters/robokassa
@@ -1069,7 +495,7 @@ git commit -m "feat: add robokassa adapter"
 
 ---
 
-## Task 10: HTTP API
+## Task 6: HTTP API
 
 **Files:**
 - Create: `internal/http/router.go`
@@ -1078,22 +504,23 @@ git commit -m "feat: add robokassa adapter"
 - Create: `internal/http/middleware.go`
 - Create: `internal/http/*_test.go`
 
-- [ ] **Step 1: Write handler tests**
+- [ ] **Step 1: Test handlers with fakes**
 
-Use `httptest` and fake use cases. Cover:
+Cover:
 
-- `POST /v1/payments` returns `201` and JSON response;
-- duplicate create returns existing response with `200`;
-- validation error returns `400`;
-- `POST /v1/webhooks/robokassa/result` returns plain text `OK10000001`;
-- `GET /v1/webhooks/robokassa/success` does not call confirmation use case;
-- `GET /v1/webhooks/robokassa/fail` does not mark payment failed.
+- `POST /v1/payments` returns `201` for new payment;
+- duplicate create returns `200` with same response;
+- validation errors return `400`;
+- `POST /v1/webhooks/robokassa/result` returns `text/plain` body `OK10000001`;
+- `GET /v1/webhooks/robokassa/success` never confirms payment;
+- `GET /v1/webhooks/robokassa/fail` never marks payment failed;
+- `/healthz`, `/readyz`, and `/metrics` are registered.
 
-- [ ] **Step 2: Implement router**
+- [ ] **Step 2: Implement routes**
 
-Routes:
+Expose:
 
-```go
+```text
 POST /v1/payments
 GET /v1/payments/:payment_id
 POST /v1/webhooks/robokassa/result
@@ -1104,31 +531,19 @@ GET /readyz
 GET /metrics
 ```
 
-- [ ] **Step 3: Implement create payment handler**
+Request validation must reject invalid `user_id`, `amount_minor`, `currency`, empty `description`, and short/empty `idempotency_key`.
 
-Validate:
-
-- `user_id > 0`;
-- `amount_minor > 0`;
-- `currency == "RUB"`;
-- `description` length is 1..512 runes;
-- `idempotency_key` length is 8..128 runes.
-
-- [ ] **Step 4: Implement Robokassa result handler**
-
-Read form values from `application/x-www-form-urlencoded`, build raw payload map, pass to use case, return `text/plain; charset=utf-8`.
-
-- [ ] **Step 5: Verify**
+- [ ] **Step 3: Verify and commit**
 
 Run:
 
 ```powershell
+gofmt -s -w internal/http
 go test ./internal/http -count=1
+go test ./... -count=1
 ```
 
-Expected: handler tests pass.
-
-- [ ] **Step 6: Commit**
+Commit:
 
 ```powershell
 git add internal/http
@@ -1137,7 +552,7 @@ git commit -m "feat: expose payment http api"
 
 ---
 
-## Task 11: RabbitMQ Publisher And Outbox Worker
+## Task 7: RabbitMQ Publisher And Outbox Worker
 
 **Files:**
 - Create: `internal/adapters/broker/rabbitmq.go`
@@ -1145,126 +560,55 @@ git commit -m "feat: expose payment http api"
 - Create: `internal/app/usecase/publish_outbox_test.go`
 - Modify: `cmd/outbox-worker/main.go`
 
-- [ ] **Step 1: Write PublishOutbox tests**
+- [ ] **Step 1: Test `PublishOutbox`**
 
 Cover:
 
-- pending event publishes and becomes `published`;
-- publisher error increments attempts and schedules next retry;
-- context cancellation stops loop without marking unpublished events as published;
-- event is published to exchange `payments.events` and routing key `payment.succeeded`.
+- pending event publishes to exchange `payments.events` with routing key `payment.succeeded`;
+- successful publish marks event `published`;
+- publisher error marks event `failed`, increments attempts, stores bounded `last_error`, schedules retry;
+- context cancellation exits without marking unpublished events as published.
 
 - [ ] **Step 2: Implement RabbitMQ publisher**
 
-Use:
+Use durable topic exchange, persistent messages, publisher confirms, `PublishWithContext`, and explicit `Close`.
 
-- durable topic exchange `payments.events`;
-- persistent messages;
-- publisher confirms;
-- context-aware publish;
-- `Close()` method for channel and connection.
+- [ ] **Step 3: Wire outbox worker**
 
-- [ ] **Step 3: Implement use case**
+`cmd/outbox-worker/main.go` must load config, create logger, DB pool, repositories, RabbitMQ publisher, run a poll loop, and shut down on SIGINT/SIGTERM.
 
-`PublishOutbox` must:
-
-1. Lock batch with `LockPending(ctx, tx, workerID, limit)`.
-2. Publish each event.
-3. Wait for confirm via broker adapter.
-4. Mark published in a transaction after successful confirm.
-5. On error, mark failed with `attempts + 1`, `publish_after = now + retryBackoff(attempts)`, and bounded `last_error`.
-
-- [ ] **Step 4: Wire worker command**
-
-`cmd/outbox-worker/main.go` must load config, create logger, DB pool, repositories, RabbitMQ publisher, then run until SIGINT/SIGTERM with graceful shutdown.
-
-- [ ] **Step 5: Verify**
+- [ ] **Step 4: Verify and commit**
 
 Run:
 
 ```powershell
+gofmt -s -w internal/adapters/broker internal/app/usecase cmd/outbox-worker
 go test ./internal/app/usecase -run TestPublishOutbox -count=1
 go test ./internal/adapters/broker -count=1
-go test ./cmd/outbox-worker
+go test ./cmd/outbox-worker -count=1
 ```
 
-Expected: tests pass.
-
-- [ ] **Step 6: Commit**
+Commit:
 
 ```powershell
 git add internal/adapters/broker internal/app/usecase/publish_outbox.go internal/app/usecase/publish_outbox_test.go cmd/outbox-worker/main.go
-git commit -m "feat: publish outbox events to rabbitmq"
+git commit -m "feat: publish payment outbox events"
 ```
 
 ---
 
-## Task 12: Reconciliation Worker
-
-**Files:**
-- Create: `internal/app/usecase/reconcile_payment.go`
-- Create: `internal/app/usecase/reconcile_payment_test.go`
-- Create: `cmd/reconciler/main.go`
-
-- [ ] **Step 1: Write tests**
-
-Cover:
-
-- provider says succeeded, use case calls `ConfirmPaymentSucceeded` with reason `reconciliation_success`;
-- provider says pending, payment remains `waiting_for_payment`;
-- old unpaid payment becomes `expired` with history reason `payment_expired`;
-- provider error returns wrapped error and does not update payment.
-
-- [ ] **Step 2: Implement use case**
-
-Use default scan window:
-
-```go
-olderThan := now.Add(-5 * time.Minute)
-newerThan := now.Add(-72 * time.Hour)
-```
-
-For each waiting payment:
-
-- if provider status is `succeeded`, confirm via common use case;
-- if `expires_at` is before `now`, mark expired and write status history;
-- if provider status is `pending`, leave unchanged.
-
-- [ ] **Step 3: Wire command**
-
-`cmd/reconciler/main.go` runs a ticker, checks `ctx.Done()` between iterations, and exits cleanly on SIGINT/SIGTERM.
-
-- [ ] **Step 4: Verify**
-
-Run:
-
-```powershell
-go test ./internal/app/usecase -run TestReconcilePayment -count=1
-go test ./cmd/reconciler
-```
-
-Expected: tests pass.
-
-- [ ] **Step 5: Commit**
-
-```powershell
-git add internal/app/usecase/reconcile_payment.go internal/app/usecase/reconcile_payment_test.go cmd/reconciler/main.go
-git commit -m "feat: reconcile pending payments"
-```
-
----
-
-## Task 13: Config, Logging, Metrics, And API Wiring
+## Task 8: Config, Logging, Metrics, API Wiring, Reconciler
 
 **Files:**
 - Modify: `internal/config/config.go`
 - Create: `internal/logger/logger.go`
 - Create: `internal/observability/metrics.go`
 - Modify: `cmd/api/main.go`
+- Create: `cmd/reconciler/main.go`
 
 - [ ] **Step 1: Implement config**
 
-Read config from environment variables:
+Read and validate:
 
 ```text
 HTTP_ADDR
@@ -1279,69 +623,49 @@ OUTBOX_BATCH_SIZE
 OUTBOX_POLL_INTERVAL
 RECONCILE_INTERVAL
 LOG_LEVEL
+LOG_FORMAT
 ```
 
-Validate required values at startup and return one joined error for all missing required fields.
+Return one joined validation error for all missing required values.
 
-- [ ] **Step 2: Implement slog logger**
+- [ ] **Step 2: Implement logger and metrics**
 
-Use JSON logs to stdout in production mode, text logs for local mode if `LOG_FORMAT=text`.
+Use `log/slog` to stdout. Expose metrics for created/succeeded payments, Robokassa callback result by signature validity, outbox status, publish duration, reconciliation checks, and HTTP latency.
 
-- [ ] **Step 3: Implement metrics**
+- [ ] **Step 3: Wire API and reconciler commands**
 
-Expose:
+`cmd/api/main.go` wires config, logger, pgx pool, repositories, Robokassa client, use cases, Gin router, `http.Server` timeouts, and graceful shutdown.
 
-- `payments_created_total`;
-- `payments_succeeded_total`;
-- `robokassa_result_total{signature_valid}`;
-- `outbox_events_total{status}`;
-- `outbox_publish_duration_seconds`;
-- `reconciliation_checked_total`;
-- `reconciliation_success_total`;
-- HTTP latency histogram by method, route pattern and status.
+`cmd/reconciler/main.go` wires config, logger, pgx pool, repositories, Robokassa client, reconciliation use case, ticker loop, and graceful shutdown.
 
-- [ ] **Step 4: Wire API command**
-
-`cmd/api/main.go` must:
-
-1. Load config.
-2. Create logger.
-3. Create DB pool.
-4. Create repositories.
-5. Create Robokassa adapter.
-6. Create use cases.
-7. Create Gin router.
-8. Start `http.Server` with read/write timeouts.
-9. Shutdown on SIGINT/SIGTERM with `context.WithTimeout`.
-
-- [ ] **Step 5: Verify**
+- [ ] **Step 4: Verify and commit**
 
 Run:
 
 ```powershell
-go test ./internal/config ./internal/logger ./internal/observability ./cmd/api
-go test ./...
+gofmt -s -w internal/config internal/logger internal/observability cmd
+go test ./internal/config ./internal/logger ./internal/observability ./cmd/... -count=1
+go test ./... -count=1
+go test -race ./... -count=1
 ```
 
-Expected: all unit tests pass.
-
-- [ ] **Step 6: Commit**
+Commit:
 
 ```powershell
-git add internal/config internal/logger internal/observability cmd/api/main.go
-git commit -m "feat: wire api service"
+git add internal/config internal/logger internal/observability cmd
+git commit -m "feat: wire payment service commands"
 ```
 
 ---
 
-## Task 14: End-To-End Local Verification
+## Task 9: Local End-To-End Verification And Documentation
 
 **Files:**
 - Modify: `README.md`
 
 - [ ] **Step 1: Document local startup**
 
-Add README commands:
+Add commands for Docker, migrations, API, outbox worker, and reconciler:
 
 ```powershell
 docker compose up -d
@@ -1357,55 +681,25 @@ make run-outbox
 make run-reconciler
 ```
 
-- [ ] **Step 2: Verify create payment through HTTP**
+- [ ] **Step 2: Verify HTTP create idempotency**
 
-Run:
+Run the same `POST /v1/payments` request twice. Expected: the second response returns the same `payment_id` and `provider_invoice_id`.
 
-```powershell
-Invoke-RestMethod -Method Post -Uri http://localhost:8080/v1/payments -ContentType 'application/json' -Body '{
-  "user_id": 12345,
-  "amount_minor": 29900,
-  "currency": "RUB",
-  "description": "Покупка 1000 coins",
-  "product_code": "coins_1000",
-  "idempotency_key": "tg-12345-coins-1000-001"
-}'
-```
+- [ ] **Step 3: Verify Robokassa ResultURL**
 
-Expected: response contains `status: waiting_for_payment`, `provider: robokassa`, non-empty `payment_url`.
+Post a valid form callback. Expected: response body is `OK{InvId}`, payment status is `succeeded`, provider event is processed, and one `PaymentSucceeded` outbox event exists.
 
-- [ ] **Step 3: Verify duplicate create request**
+- [ ] **Step 4: Verify outbox failure drill**
 
-Run the same command again.
+Stop RabbitMQ, confirm a payment, restart RabbitMQ. Expected: outbox retries and eventually marks the event `published`.
 
-Expected: same `payment_id` and same `provider_invoice_id`.
+- [ ] **Step 5: Verify duplicate and invalid callback drills**
 
-- [ ] **Step 4: Verify ResultURL callback**
+Send the same valid ResultURL twice. Expected: one successful payment and one outbox event.
 
-Generate valid Robokassa signature using adapter test helper or a small `go test` fixture, then post form data:
+Send invalid signature. Expected: provider event saved with `signature_valid=false`, payment remains `waiting_for_payment`, no outbox event is created.
 
-```powershell
-Invoke-WebRequest -Method Post -Uri http://localhost:8080/v1/webhooks/robokassa/result -ContentType 'application/x-www-form-urlencoded' -Body 'OutSum=299.00&InvId=10000001&SignatureValue=DE98F9AEE063E4BC6CB7D8E572B764D0'
-```
-
-Expected: response body is `OK10000001`; database payment status is `succeeded`; one `PaymentSucceeded` outbox event exists.
-
-- [ ] **Step 5: Verify outbox publishing**
-
-Check RabbitMQ management UI at `http://localhost:15672` or use queue inspection.
-
-Expected: published message body matches `PaymentSucceeded` contract and outbox row status is `published`.
-
-- [ ] **Step 6: Verify failure drills**
-
-Run these drills:
-
-- stop RabbitMQ, confirm payment, start RabbitMQ, verify outbox retry publishes later;
-- send same ResultURL twice, verify one outbox event;
-- send invalid signature, verify provider event saved with `signature_valid=false` and payment remains `waiting_for_payment`;
-- stop API before callback test, run reconciler with provider fake/integration mode, verify successful provider status confirms payment.
-
-- [ ] **Step 7: Run full verification**
+- [ ] **Step 6: Run final verification**
 
 Run:
 
@@ -1417,46 +711,44 @@ go test -tags=integration ./...
 golangci-lint run ./...
 ```
 
-Expected: all commands pass.
-
-- [ ] **Step 8: Commit**
+Commit:
 
 ```powershell
 git add README.md
-git commit -m "docs: document local payment service verification"
+git commit -m "docs: document payment service verification"
 ```
 
 ---
 
 ## Production Readiness Gate
 
-Before production, verify every item:
+Before production, every item must be true:
 
 - [ ] `ResultURL` is the only path that marks payment `succeeded`.
-- [ ] `SuccessURL` and `FailURL` only render user-facing result pages.
+- [ ] `SuccessURL` and `FailURL` only show user-facing result pages.
 - [ ] `ResultURL` returns `OK{InvId}` only after PostgreSQL commit.
-- [ ] `payments.idempotency_key` unique constraint is present and covered by test.
-- [ ] `payment_provider_events` stores raw payload and signature validity.
+- [ ] `payments.idempotency_key` has a unique constraint and test coverage.
+- [ ] `payment_provider_events` stores raw payload, payload hash, and signature validity.
 - [ ] `ConfirmPaymentSucceeded` is shared by callback and reconciler.
-- [ ] `outbox_events` unique business event prevents duplicate `PaymentSucceeded`.
+- [ ] `outbox_events` has a unique business event constraint.
 - [ ] Outbox worker uses `FOR UPDATE SKIP LOCKED`.
-- [ ] RabbitMQ publisher confirms are required before `published`.
-- [ ] All DB calls accept and propagate `context.Context`.
+- [ ] RabbitMQ publisher confirms are required before marking `published`.
+- [ ] All DB calls propagate `context.Context`.
 - [ ] External Robokassa calls have timeouts.
-- [ ] `amount_minor` is `int64`; no money path uses `float64`.
-- [ ] Logs do not include Robokassa passwords, database URL password, or raw secrets.
-- [ ] Metrics and alerts cover API, outbox and reconciliation failure modes.
+- [ ] No money path uses `float64`.
+- [ ] Logs never include Robokassa passwords, database password, or raw secrets.
+- [ ] Metrics cover API, Robokassa callbacks, outbox, and reconciliation.
 
 ## Recommended Execution Order
 
-1. Task 1 through Task 4 create the foundation and should be done sequentially.
-2. Task 5 through Task 7 are application-core work and should be reviewed after each task.
-3. Task 8 through Task 10 can be parallelized after ports and use cases stabilize.
-4. Task 11 and Task 12 can be parallelized after PostgreSQL adapters exist.
-5. Task 13 and Task 14 should be last because they wire and verify the full system.
+1. Tasks 1-3 must be sequential: domain, schema, and application contracts set the foundation.
+2. Tasks 4-6 can proceed after usecase tests stabilize.
+3. Task 7 depends on outbox repository behavior from Task 4.
+4. Task 8 should run after adapters and HTTP boundaries compile.
+5. Task 9 is the final local verification and documentation pass.
 
 ## Self-Review
 
-- Spec coverage: plan maps every architecture section to tasks: domain, migrations, CreatePayment, HandleRobokassaResult, ConfirmPaymentSucceeded, PublishOutbox, ReconcilePayment, HTTP API, RabbitMQ contract, idempotency, metrics, alerts and failure drills.
-- Placeholder scan: no task relies on an unspecified future decision; every external boundary has named files, commands and expected observable behavior.
-- Type consistency: plan consistently uses `Payment`, `Money`, `StatusWaitingForPayment`, `StatusSucceeded`, `ProviderInvoiceID`, `PaymentSucceeded`, `ports.Tx`, `context.Context`, and repository interfaces under `internal/app/ports/repository`.
+- Spec coverage: this plan maps the architecture to domain invariants, schema, use cases, PostgreSQL, Robokassa, HTTP, RabbitMQ outbox, reconciliation, config, observability, and local failure drills.
+- Placeholder scan: no task contains placeholder markers or unspecified future decisions.
+- Type consistency: existing packages and types are preserved where they already exist; new work builds on `payment.Payment`, `payment.Money`, `outbox.Event`, `ports.Tx`, repository ports, and `ports.PaymentProvider`.

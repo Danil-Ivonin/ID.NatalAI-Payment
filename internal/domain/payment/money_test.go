@@ -15,10 +15,10 @@ func TestNewMoney(t *testing.T) {
 		wantErr  error
 	}{
 		{name: "valid rub amount", amount: 29900, currency: "RUB", wantErr: nil},
-		{name: "zero amount", amount: 0, currency: "RUB", wantErr: nil},
-		{name: "negative amount", amount: -1, currency: "RUB", wantErr: ErrNegativeMoney},
-		{name: "empty currency", amount: 100, currency: "", wantErr: ErrWrongCurrency},
-		{name: "unsupported currency", amount: 100, currency: "USD", wantErr: ErrWrongCurrency},
+		{name: "zero amount", amount: 0, currency: "RUB", wantErr: ErrInvalidMoney},
+		{name: "negative amount", amount: -1, currency: "RUB", wantErr: ErrInvalidMoney},
+		{name: "empty currency", amount: 100, currency: "", wantErr: ErrInvalidCurrency},
+		{name: "unsupported currency", amount: 100, currency: "USD", wantErr: ErrInvalidCurrency},
 	}
 
 	for _, tt := range tests {
