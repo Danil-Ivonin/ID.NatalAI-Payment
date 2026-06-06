@@ -1,3 +1,9 @@
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+CREATE SEQUENCE payment_invoice_id_seq
+    START WITH 1000
+    INCREMENT BY 1;
+
 CREATE TABLE payments (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id BIGINT NOT NULL,
