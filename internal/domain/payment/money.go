@@ -5,12 +5,12 @@ type Money struct {
 	Currency    string
 }
 
-func NewMoney(amount int64, currency string) (*Money, error) {
+func NewMoney(amount int64, currency string) (Money, error) {
 	if amount <= 0 {
-		return nil, ErrInvalidMoney
+		return Money{}, ErrInvalidMoney
 	}
 	if currency != "RUB" {
-		return nil, ErrInvalidCurrency
+		return Money{}, ErrInvalidCurrency
 	}
-	return &Money{amount, currency}, nil
+	return Money{amount, currency}, nil
 }
