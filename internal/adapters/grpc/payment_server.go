@@ -36,14 +36,6 @@ func (s *PaymentServer) CreatePayment(
 		return nil, status.Error(codes.Internal, "create payment usecase is not configured")
 	}
 
-	return &payment.CreatePaymentResponse{
-		PaymentId:         "teest_id",
-		Provider:          "denich",
-		ProviderInvoiceId: 1234,
-		Status:            "ready",
-		PaymentUrl:        "PaymentURL",
-	}, nil
-
 	resp, err := s.createPayment.Execute(ctx, usecase.CreatePaymentRequest{
 		UserID:         req.UserId,
 		AmountMinor:    req.AmountMinor,
