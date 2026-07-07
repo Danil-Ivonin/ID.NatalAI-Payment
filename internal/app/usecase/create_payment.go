@@ -2,8 +2,6 @@ package usecase
 
 import (
 	"context"
-	"time"
-
 	"github.com/Danil-Ivonin/ID.NatalAI-Payment/internal/app/ports"
 	"github.com/Danil-Ivonin/ID.NatalAI-Payment/internal/app/ports/repository"
 	"github.com/Danil-Ivonin/ID.NatalAI-Payment/internal/domain/payment"
@@ -23,9 +21,7 @@ type CreatePaymentRequest struct {
 	AmountMinor    int64
 	Currency       string
 	Description    string
-	ProductCode    string
 	IdempotencyKey string
-	ExpiresAt      *time.Time
 }
 
 type CreatePaymentResponse struct {
