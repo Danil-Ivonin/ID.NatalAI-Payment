@@ -24,7 +24,7 @@ func loggingInterceptor(
 		ctx,
 		"grpc request",
 		"method", info.FullMethod,
-		"duration", time.Since(start),
+		"duration", time.Since(start).Microseconds(),
 		"code", status.Code(err).String(),
 	)
 
