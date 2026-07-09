@@ -19,13 +19,10 @@ type ConfirmPaymentUsecase struct {
 }
 
 type ConfirmPaymentRequest struct {
-	Provider          string
-	ProviderInvoiceID int64
-	AmountMinor       int64
-	Currency          string
-	PaidAt            time.Time
-	Reason            string
-	Metadata          json.RawMessage
+	PaymentID uuid.UUID
+	PaidAt    time.Time
+	Reason    string
+	Metadata  json.RawMessage
 }
 
 type ConfirmPaymentResponse struct {
